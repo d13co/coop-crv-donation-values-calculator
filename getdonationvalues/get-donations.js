@@ -2,6 +2,7 @@ import algosdk from 'algosdk';
 import { crv } from '../constants.js';
 import { queryIndexer, die } from '../util.js';
 import { priceAt } from '../trackprices/priceat.js';
+import { writeFileSync } from 'fs';
 
 const server = "https://mainnet-idx.algonode.cloud";
 const port = 443;
@@ -50,29 +51,43 @@ export const getDonations  = async () => {
         usd = 1;
         break;
       default:
-        console.error('Skipping aid', assetId, 'from id', id);
-        return;
+        usd = '???';
     }
-    usd *= amount;
-    txn.usdValue = usd;
-    return { sender, id, ts, assetId, amount, usd, };
+    const assetPriceAtTime = usd;
+    if (typeof usd === "number") {
+      usd *= amount;
+      txn.usdValue = usd;
+    } else {
+      txn.usdValue = '??? TODO';
+    }
+    return { sender, id, ts, date: new Date(ts * 1000).toISOString(), assetId, amount, usd, assetPriceAtTime };
   }).filter(Boolean);
 }
 
 const donations = await getDonations();
+writeFileSync('donations.csv', toCSV(donations));
+
 let totals = 0;
 const donors = Object.entries(
-  donations.reduce((donors, { sender, usd, id }) => {
-    const d = donors[sender] = donors[sender] ?? { usd: 0, ids: [] };
-    d.usd += usd;
-    totals += usd;
-    d.ids.push(id);
-    return donors;
-  }, {})
-).sort(([_, { usd: a }], [__, { usd: b }]) => a < b ? 1 : -1)
+    donations.reduce((donors, { sender, usd, id }) => {
+      const d = donors[sender] = donors[sender] ?? { usd: 0, ids: [] };
+      if (typeof usd === "number") {
+        d.usd += usd;
+        totals += usd;
+      }
+      d.ids.push(id);
+      return donors;
+    }, {})
+  )
+  .sort(([_, { usd: a }], [__, { usd: b }]) => a < b ? 1 : -1)
   .map(x => {
-    x[1].perc = x[1].usd / totals * 100;
-    return x;
+    return { donor: x[0], usd_value: x[1].usd, perc: x[1].usd / totals * 100, ids: x[1].ids }
   });
 
-console.log(JSON.stringify(donors, 0, 2));
+writeFileSync('donors.csv', toCSV(donors));
+
+function toCSV(data) {
+  const header = Object.keys(data[0]).join(',');
+  const rows = data.map(row => Object.values(row).join(','));
+  return [header, ...rows].join('\n');
+}
