@@ -2,10 +2,12 @@ import { readFileSync, writeFileSync } from 'fs';
 import algosdk from 'algosdk';
 
 // tinyman
-// node pool.js 1002541853 IUUZ66NGBEKKTZ2RW7CAUOGEIBOFTYNUNMMEUSS3K5CSJAMGDY747F5KIA 1103395709
+// node pool.js --max-old-space-size=36384 1002541853 IUUZ66NGBEKKTZ2RW7CAUOGEIBOFTYNUNMMEUSS3K5CSJAMGDY747F5KIA 1103395709 | tee app-tm-coop-algo.csv
+
+// node pool.js 1002541853 DHOG6OY4JHACEDCK27ZPFDOQISX7TQ4VRO5MUBQLIIVGSQ3N5BRMQ3SWLA 1107034824 | tee app-tm-coop-usdc.csv
 
 // pact
-// node pool.js 1103395819
+// node pool.js 1103395819 | tee app-pact-coop-algo.csv app-pact-coop-algo.csv
 
 const token = "";
 const server = "https://mainnet-idx.algonode.cloud";
@@ -27,7 +29,7 @@ async function getAssetInfo(assetId) {
   return assetCache[assetId];
 }
 
-async function lookup({ query, attempts = 1, callback, old_err, nn }) {
+async function lookup({ query, attempts = 1, callback, old_err, nn, return_data = true }) {
   if (nn)
     query = query.nextToken(nn);
   let res;
@@ -44,7 +46,7 @@ async function lookup({ query, attempts = 1, callback, old_err, nn }) {
       console.error('too many errors, quiting');
       return;
     }
-    return lookup({ query, attempts: attempts+1, old_err: e.message, nn, callback });
+    return lookup({ query, attempts: attempts+1, old_err: e.message, nn, callback, return_data, });
   }
   const elapsed = Math.floor((Date.now() - start) / 1000);
   const data = res.transactions ?? res.transaction;
@@ -59,11 +61,13 @@ async function lookup({ query, attempts = 1, callback, old_err, nn }) {
   // console.error(res['next-token'], res.transactions?.length, round1, round2, `${elapsed}s.`);
   if (res['next-token']) {
     nn = res['next-token'];
-    await sleep(1500);
-    const next = await lookup({ query, attempts: 1, callback, nn });
-    return [...res.transactions, ...next];
+    await sleep(500);
+    const next = await lookup({ query, attempts: 1, callback, nn, return_data });
+    if (return_data)
+      return [...res.transactions, ...next];
   }
-  return res.transactions ?? data ?? [];
+  if (return_data)
+    return res.transactions ?? data ?? [];
 }
 
 let [appID, appAddress, LPID] = process.argv.slice(2);
@@ -103,6 +107,7 @@ const lpTxns = await lookup({
 
 lpTxns.reverse();
 
+console.error('Processing', lpTxns.length, 'LP txns');
 let last_balance = 0;
 for(const txn of lpTxns) {
   const rtxn = findATxn(txn, LPID);
@@ -122,6 +127,7 @@ for(const txn of lpTxns) {
 }
 
 writeFileSync(`LP-${LPID}.json`, JSON.stringify(lp_state, 0, 2));
+console.error('Processed', lpTxns.length, 'LP txns');
 
 function findATxn(txn, id) {
   const { "asset-transfer-transaction": atxn, "inner-txns": itxns } = txn;
@@ -146,19 +152,13 @@ async function proc(txns) {
       "confirmed-round": rnd,
     } = txn;
     let { A, B, asset_1_reserves, asset_2_reserves, asset_1_protocol_fees } = findParseState(txn, appID) ?? {};
-    if (is(A) && is(B))  {
-      states[ts] = { A, B };
-    }
     if (is(asset_1_reserves) && is(asset_2_reserves) && is(asset_1_protocol_fees)) {
-      A = asset_1_reserves - asset_1_protocol_fees;
-      B = asset_2_reserves;
-      if (A<B) {
-        [A,B] = [B,A];
-      }
-      console.log(new Date(ts * 1000), A, B, B/A);
-      states[ts] = { A, B };
+      B = asset_1_reserves - asset_1_protocol_fees;
+      A = asset_2_reserves;
     }
-    debugger;
+    if (is(A) && is(B))  {
+      console.log([ts, A, B, A/B].join(','));
+    }
   }
 }
 
@@ -204,7 +204,7 @@ await lookup({
   callback: proc,
 });
 
-writeFileSync(`app-${appID}.json`, JSON.stringify(states, 0, 2));
+// writeFileSync(`app-${appID}.json`, JSON.stringify(states, 0, 2));
 
 function is(val) {
   return val !== undefined;
