@@ -2,12 +2,12 @@ import { readFileSync, writeFileSync } from 'fs';
 import algosdk from 'algosdk';
 
 // tinyman
-// node pool.js --max-old-space-size=36384 1002541853 IUUZ66NGBEKKTZ2RW7CAUOGEIBOFTYNUNMMEUSS3K5CSJAMGDY747F5KIA 1103395709 | tee app-tm-coop-algo.csv
+// node --max-old-space-size=36384 pool.js 1002541853 IUUZ66NGBEKKTZ2RW7CAUOGEIBOFTYNUNMMEUSS3K5CSJAMGDY747F5KIA 1103395709 | tee app-tm-coop-algo.csv
 
 // node pool.js 1002541853 DHOG6OY4JHACEDCK27ZPFDOQISX7TQ4VRO5MUBQLIIVGSQ3N5BRMQ3SWLA 1107034824 | tee app-tm-coop-usdc.csv
 
 // pact
-// node pool.js 1103395819 | tee app-pact-coop-algo.csv app-pact-coop-algo.csv
+// node pool.js 1103395819 | tee app-pact-coop-algo.csv 
 
 const token = "";
 const server = "https://mainnet-idx.algonode.cloud";
@@ -70,7 +70,7 @@ async function lookup({ query, attempts = 1, callback, old_err, nn, return_data 
     return res.transactions ?? data ?? [];
 }
 
-let [appID, appAddress, LPID] = process.argv.slice(2);
+let [appID, appAddress, LPID, skipLP] = process.argv.slice(2);
 
 if (!appID) {
   console.log('Expected: <asa ID>');
@@ -79,6 +79,7 @@ if (!appID) {
 
 appID = Number(appID);
 
+const customAppAddress = !!appAddress;
 if (!appAddress) {
   appAddress = algosdk.getApplicationAddress(appID);
 }
@@ -99,15 +100,17 @@ const { decimals: decimalsLP } = await getAssetInfo(LPID);
 //   [timestamp]: LP_in_circulation
 const lp_state = { };
 
-const lpTxns = await lookup({
+const lpTxns = (skipLP ? [] : await lookup({
   query: client.searchForTransactions()
     .address(appAddress)
     .assetID(LPID),
-});
+}));
 
 lpTxns.reverse();
 
-console.error('Processing', lpTxns.length, 'LP txns');
+if (lpTxns.length)
+  console.error('Processing', lpTxns.length, 'LP txns');
+
 let last_balance = 0;
 for(const txn of lpTxns) {
   const rtxn = findATxn(txn, LPID);
@@ -126,8 +129,10 @@ for(const txn of lpTxns) {
   }
 }
 
-writeFileSync(`LP-${LPID}.json`, JSON.stringify(lp_state, 0, 2));
-console.error('Processed', lpTxns.length, 'LP txns');
+if (lpTxns.length) {
+  writeFileSync(`LP-${LPID}.json`, JSON.stringify(lp_state, 0, 2));
+  console.error('Processed', lpTxns.length, 'LP txns');
+}
 
 function findATxn(txn, id) {
   const { "asset-transfer-transaction": atxn, "inner-txns": itxns } = txn;
@@ -141,7 +146,9 @@ function findATxn(txn, id) {
 //   [timestamp]: { A, B }
 const states = {};
 
+let total_swap = 0;
 async function proc(txns) {
+  total_swap += txns.length
   for(const txn of txns) {
     const {
       id,
@@ -152,17 +159,23 @@ async function proc(txns) {
       "confirmed-round": rnd,
     } = txn;
     let { A, B, asset_1_reserves, asset_2_reserves, asset_1_protocol_fees } = findParseState(txn, appID) ?? {};
-    if (is(asset_1_reserves) && is(asset_2_reserves) && is(asset_1_protocol_fees)) {
-      B = asset_1_reserves - asset_1_protocol_fees;
+    if (is(asset_1_reserves) && is(asset_2_reserves)) {
+      // TODO fees?
+      B = asset_1_reserves;
       A = asset_2_reserves;
     }
     if (is(A) && is(B))  {
-      console.log([ts, A, B, A/B].join(','));
+      console.log([ts, A, B, A/B, txn.id].join(','));
+    } else {
+      console.error('?NO DATA?', txn.id);
     }
   }
+  console.error('Processed', total_swap, 'swaps');
 }
 
-function findParseState(txn, appID) {
+function findParseState(txn, appID, otxn) {
+  if (!otxn)
+    otxn = txn;
   const {
     "application-transaction": atxn,
     "inner-txns": itxns,
@@ -179,10 +192,10 @@ function findParseState(txn, appID) {
   if (atxn && atxn['application-id'] === appID && gsd) {
     return parseState(gsd);
   }
-  const i = itxns?.map(itxn => findParseState(itxn, appID)).filter(Boolean);
+  const i = itxns?.map(itxn => findParseState(itxn, appID, otxn)).filter(Boolean);
   if (i?.length) {
     if (i.length > 1) {
-      debugger;
+      console.error("more than one candidates", i, otxn.id);
     }
     return i[0];
   }
@@ -199,8 +212,12 @@ function parseState(gsd) {
   return obj;
 }
 
+let query = client.searchForTransactions().applicationID(appID).limit(10000);
+if (customAppAddress)
+  query = query.address(appAddress);
+
 await lookup({
-  query: client.searchForTransactions().address(appAddress).applicationID(appID).limit(5000), 
+  query,
   callback: proc,
 });
 
