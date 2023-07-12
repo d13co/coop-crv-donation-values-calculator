@@ -6,4 +6,10 @@ Process:
 - Get LP circulation & LP pool sizes from chain, group by 15min bands (high/low)
 - Run get-donations to get USD values as csv files
 
-To run everything from scratch, run run.sh in the root of the project
+Requirements: node, npm
+
+Setup: run `npm install`
+
+Run `bash run.sh` in the root of the project
+
+Output will be under getdonationvalues/donations.csv and donors.csv
