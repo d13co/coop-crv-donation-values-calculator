@@ -15,6 +15,8 @@ const port = 443;
 
 const client = new algosdk.Indexer(token, server, port);
 
+const entries = [];
+
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -115,11 +117,10 @@ if (lpTxns.length)
 let lastBandData = { ts: 0 };
 
 function makeBandData(ts, a, b) {
-  return { ts, open: [a, b], close: [a, b], high: [a, b], low: [a, b] };
+  return { ts, high: [a, b], low: [a, b] };
 }
 
 function updateBandData(data, a, b) {
-  data.close = [a, b];
   const { high: [ha, hb], low: [la, lb] } = data;
   if (ha/hb < a/b) {
     data.high = [a, b];
@@ -133,7 +134,9 @@ function updateBandData(data, a, b) {
 function get15MBand(ts) {
   const date = new Date(1000 * ts);
   date.setUTCMinutes(Math.floor(date.getUTCMinutes() / 15) * 15);
-  return date.valueOf();
+  date.setUTCSeconds(0);
+  date.setUTCMilliseconds(0);
+  return Math.floor(date.valueOf() / 1000);
 }
 
 let last_balance = 0;
@@ -189,7 +192,7 @@ async function proc(txns) {
         lastBandData = updateBandData(lastBandData, A, B);
       } else {
         if (lastBandData.ts) {
-          console.log(JSON.stringify(lastBandData));
+          entries.push(lastBandData);
         }
         lastBandData = makeBandData(band, A, B);
       }
@@ -248,7 +251,13 @@ await lookup({
   callback: proc,
 });
 
-console.log(JSON.stringify(lastBandData));
+entries.push(lastBandData);
+
+entries.sort(({ts: a}, {ts: b}) => a < b ? -1 : 1);
+
+for(const row of entries) {
+  console.log(JSON.stringify(row));
+}
 
 function is(val) {
   return val !== undefined;

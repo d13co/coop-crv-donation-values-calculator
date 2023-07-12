@@ -1,3 +1,6 @@
+import fetch from 'node-fetch';
+import promilol from 'promilol';
+
 export function die(...args) {
   console.error(...args);
   process.exit(1);
@@ -58,4 +61,83 @@ export const queryIndexer = async (queryObj, limit = 5000, nextToken, attempts =
   }
 }
 
+export const NFDCache = {};
 
+// cachedLookupNFD
+//  NFDCache -> promise || result
+//  addresses -> NFDCache -> [existing, new]
+//  if [new] -> NFDCache += promise
+//  await Promise.all(values(NFDCache[addresses]))
+
+export async function lookupNFD(addresses) {
+  addresses = Array.isArray(addresses) ? addresses : [addresses];
+  const New = []
+  for(const address of addresses) {
+    if (NFDCache[address] === undefined) {
+      New.push(address);
+    }
+  }
+  if (New.length) {
+    const asyncRes = _lookupNFD(New);
+    for(const N of New) {
+      NFDCache[N] = asyncRes.then((data) => {
+        return data[N];
+      });
+    }
+  }
+  const resultsE = Object.entries(NFDCache).filter(([key]) => addresses.includes(key));
+  const results = {};
+  for(const [resKey, resValue] of resultsE) {
+    NFDCache[resKey] = results[resKey] = await resValue;
+  }
+  return results;
+}
+
+async function _lookupNFD(address) {
+  // TODO cache not existing
+  // TODO debounce / join requests
+  let addresses = Array.isArray(address) ? address : [address];
+  const results = Object.fromEntries(addresses.map(address => ([address, null])));
+  const chunks = chunk(addresses, 20);
+  await promilol(chunks, async chunk => {
+    if (!chunk.length)
+      return;
+    const query = chunk.join('&address=');
+    // console.log("Querying", ...chunk);
+    const url = `https://api.nf.domains/nfd/address?address=${query}&view=thumbnail`;
+    let text;
+    try {
+      const resp = await fetch(url);
+      text = await resp.text();
+      let json;
+      if (!text.length) {
+        return;
+      }
+      json = JSON.parse(text);
+      for(const { name, caAlgo } of json) {
+        const matches = caAlgo?.filter(caAlgo => chunk.includes(caAlgo));
+        if (!matches)
+          continue;
+        for(const addr of matches) {
+          results[addr] = name;
+        }
+      }
+    } catch(e) {
+      console.log('NFDomains lookup', e, text);
+      return;
+    }
+  }, { concurrency: 4 });
+  return results;
+}
+
+function chunk(elems, num=20) {
+  return elems.reduce((out, cur) => {
+    let last = out[out.length - 1];
+    if (last.length == num) {
+      out.push([]);
+      last = out[out.length -1];
+    }
+    last.push(cur);
+    return out;
+  }, [[]]);
+}

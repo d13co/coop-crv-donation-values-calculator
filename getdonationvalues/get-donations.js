@@ -1,8 +1,8 @@
 import algosdk from 'algosdk';
 import { crv } from '../constants.js';
-import { queryIndexer, die } from '../util.js';
+import { queryIndexer, die, lookupNFD } from '../util.js';
 import { priceAt } from '../trackprices/priceat.js';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 
 const server = "https://mainnet-idx.algonode.cloud";
 const port = 443;
@@ -51,7 +51,7 @@ export const getDonations  = async () => {
         usd = 1;
         break;
       default:
-        usd = '???';
+        usd = getLPDonationAtTime(assetId, ts);
     }
     const assetPriceAtTime = usd;
     if (typeof usd === "number") {
@@ -64,7 +64,74 @@ export const getDonations  = async () => {
   }).filter(Boolean);
 }
 
+function getLPDonationAtTime(aid, ts) {
+  try {
+    const circulatingData = JSON.parse(readFileSync(`../lps/LP-${aid}.json`));
+    let lastTS;
+    for(const [t, circulating] of Object.entries(circulatingData)) {
+      if (Number(t) > ts) {
+        break;
+      }
+      lastTS = Number(t);
+    }
+    const circulating = circulatingData[lastTS];
+    const { ts: lpTS, mid: [algoInPool, coopInPool] } = getLPDataNear(aid, ts);
+    const { coop, algo, coopTs, algoTs } = priceAt(ts);
+    const algoValue = algoInPool * algo / 1_000_000;
+    const coopValue = coopInPool * coop / 1_000_000;
+    const lpValue = algoValue + coopValue;
+    const singleValue = lpValue / circulating;
+    if (aid === 1103395824) {
+      console.log({
+        targetTs: new Date(ts * 1000),
+        lpTokenTs: new Date(lastTS * 1000),
+        lpDataTs: new Date(lpTS * 1000),
+      });
+    }
+    return singleValue;
+  } catch(e) {
+    console.error(e);
+    debugger;
+  }
+}
+
+const swapsFile = {};
+
+function makeMid(row) {
+  const { ts, high: [hA, hB], low: [lA, lB] } = row;
+  return { ts, mid: [(hA - lA) / 2, (hB - lB) / 2] };
+}
+
+function getLPDataNear(aid, ts) {
+  if (!swapsFile[aid]) {
+    const filename = `../lps/swaps-${aid}.jsons`;
+    console.error('loading', filename);
+    swapsFile[aid] = readFileSync(filename).toString().split('\n')
+      .filter(Boolean)
+      .map(s => JSON.parse(s));
+    console.error('loaded', filename);
+  }
+  let lastEntry;
+  for(const entry of swapsFile[aid]) {
+    const { ts: entryTs } = entry;
+    if (entryTs > ts) {
+      return makeMid(lastEntry ?? entry);
+    }
+    lastEntry = entry;
+  }
+  return makeMid(lastEntry);
+}
+
 const donations = await getDonations();
+const senders = [...new Set(donations.map(({sender}) => sender))];
+const nfds = await lookupNFD(senders);
+donations.forEach(donation => {
+  const nfd = nfds[donation.sender];
+  if (nfd) {
+    donation.nfd = nfd;
+  }
+});
+
 writeFileSync('donations.csv', toCSV(donations));
 
 let totals = 0;
@@ -87,7 +154,13 @@ const donors = Object.entries(
 writeFileSync('donors.csv', toCSV(donors));
 
 function toCSV(data) {
-  const header = Object.keys(data[0]).join(',');
+  const headers = new Set();
+  for(const row of data) {
+    for(const key of Object.keys(row)) {
+      headers.add(key);
+    }
+  }
+  const header = [...headers];
   const rows = data.map(row => Object.values(row).join(','));
   return [header, ...rows].join('\n');
 }
