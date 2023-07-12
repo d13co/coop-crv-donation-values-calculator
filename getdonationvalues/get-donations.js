@@ -51,7 +51,7 @@ export const getDonations  = async () => {
         usd = 1;
         break;
       default:
-        usd = getLPDonationAtTime(assetId, ts);
+        usd = getLPDonationAtTime(assetId, ts, id);
     }
     const assetPriceAtTime = usd;
     if (typeof usd === "number") {
@@ -64,7 +64,7 @@ export const getDonations  = async () => {
   }).filter(Boolean);
 }
 
-function getLPDonationAtTime(aid, ts) {
+function getLPDonationAtTime(aid, ts, id) {
   try {
     const circulatingData = JSON.parse(readFileSync(`../lps/LP-${aid}.json`));
     let lastTS;
@@ -81,12 +81,16 @@ function getLPDonationAtTime(aid, ts) {
     const coopValue = coopInPool * coop / 1_000_000;
     const lpValue = algoValue + coopValue;
     const singleValue = lpValue / circulating;
-    if (aid === 1103395824) {
+    if (id === "WLHONCY6YF5N2DZYE5QB2HBJRIWNYEGFGKEWARIMGJE4HFC6BTEQ") {
       console.log({
         targetTs: new Date(ts * 1000),
         lpTokenTs: new Date(lastTS * 1000),
         lpDataTs: new Date(lpTS * 1000),
+        ts,
+        lpTokenUnix: lastTS,
+        lpDataUnix: lpTS,
       });
+      debugger;
     }
     return singleValue;
   } catch(e) {
@@ -99,7 +103,7 @@ const swapsFile = {};
 
 function makeMid(row) {
   const { ts, high: [hA, hB], low: [lA, lB] } = row;
-  return { ts, mid: [(hA - lA) / 2, (hB - lB) / 2] };
+  return { ts, mid: [(hA + lA) / 2, (hB + lB) / 2] };
 }
 
 function getLPDataNear(aid, ts) {
@@ -122,13 +126,14 @@ function getLPDataNear(aid, ts) {
   return makeMid(lastEntry);
 }
 
-const donations = await getDonations();
+let donations = await getDonations();
 const senders = [...new Set(donations.map(({sender}) => sender))];
 const nfds = await lookupNFD(senders);
-donations.forEach(donation => {
-  const nfd = nfds[donation.sender];
-  if (nfd) {
-    donation.nfd = nfd;
+donations = donations.map(donation => {
+  const nfd = nfds[donation.sender] ?? '';
+  return {
+    nfd,
+    ...donation,
   }
 });
 
@@ -137,7 +142,9 @@ writeFileSync('donations.csv', toCSV(donations));
 let totals = 0;
 const donors = Object.entries(
     donations.reduce((donors, { sender, usd, id }) => {
-      const d = donors[sender] = donors[sender] ?? { usd: 0, ids: [] };
+      const d = donors[sender] = donors[sender] ?? { nfd: '', usd: 0, ids: [] };
+      if (nfds[sender])
+        d.nfd = nfds[sender];
       if (typeof usd === "number") {
         d.usd += usd;
         totals += usd;
@@ -148,7 +155,7 @@ const donors = Object.entries(
   )
   .sort(([_, { usd: a }], [__, { usd: b }]) => a < b ? 1 : -1)
   .map(x => {
-    return { donor: x[0], usd_value: x[1].usd, perc: x[1].usd / totals * 100, ids: x[1].ids }
+    return { nfd: x[1].nfd, donor: x[0], usd_value: x[1].usd, perc: x[1].usd / totals * 100, ids: x[1].ids }
   });
 
 writeFileSync('donors.csv', toCSV(donors));
