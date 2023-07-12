@@ -109,11 +109,11 @@ function makeMid(row) {
 function getLPDataNear(aid, ts) {
   if (!swapsFile[aid]) {
     const filename = `../lps/swaps-${aid}.jsons`;
-    console.error('loading', filename);
+    // console.error('loading', filename);
     swapsFile[aid] = readFileSync(filename).toString().split('\n')
       .filter(Boolean)
       .map(s => JSON.parse(s));
-    console.error('loaded', filename);
+    // console.error('loaded', filename);
   }
   let lastEntry;
   for(const entry of swapsFile[aid]) {

@@ -197,7 +197,7 @@ async function proc(txns) {
         lastBandData = makeBandData(band, A, B);
       }
     } else {
-      console.error('?NO DATA?', txn.id);
+      // console.error('?NO DATA?', txn.id);
     }
   }
   console.error('Processed', total_swap, 'swaps');
